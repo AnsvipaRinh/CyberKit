@@ -34,6 +34,12 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_15.4.app
           xcodebuild -version
 
+      - name: Install Ruby (for build scripts)
+        run: |
+          # Ensure Ruby is available for build scripts
+          which ruby || brew install ruby
+          ruby --version
+
       - name: Apply WK→WP rename
         run: |
           export WK_PREFIX=${{ github.event.inputs.wk_prefix }}
@@ -43,21 +49,29 @@ jobs:
             echo "script_rename.sh not found, skipping rename"
           fi
 
-      - name: Build WebKit for iOS device (using xcodebuild directly)
+      - name: Build WebKit for iOS device (using build-webkit script)
         run: |
-          # Use xcodebuild directly on workspace - more reliable than build-webkit script
-          xcodebuild \
-            -workspace CyberKit.xcworkspace \
-            -scheme CyberKit \
-            -configuration Release \
-            -sdk iphoneos \
-            -arch arm64 \
-            IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            -jobs $(sysctl -n hw.ncpu) \
-            -quiet
+          if [ -f "Tools/Scripts/build-webkit" ]; then
+            Tools/Scripts/build-webkit \
+              --ios-device \
+              --target-ios-version=${{ github.event.inputs.ios_version }} \
+              --release \
+              --no-build-testing
+          else
+            echo "build-webkit not found, trying xcodebuild on workspace"
+            xcodebuild \
+              -workspace CyberKit.xcworkspace \
+              -scheme CyberKit \
+              -configuration Release \
+              -sdk iphoneos \
+              -arch arm64 \
+              IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              -jobs $(sysctl -n hw.ncpu) \
+              -quiet
+          fi
 
       - name: Package CyberKit frameworks
         run: |
