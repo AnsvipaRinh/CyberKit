@@ -43,6 +43,23 @@ jobs:
             echo "script_rename.sh not found, skipping rename"
           fi
 
+      - name: Fix libwebrtc for iOS (patch macOS libSystem.B.dylib)
+        run: |
+          # Find and patch libwebrtc xcodeproj to use iOS SDK libSystem
+          WEBRTC_PROJ=$(find . -name "*.xcodeproj" -path "*/libwebrtc/*" | head -1)
+          if [ -n "$WEBRTC_PROJ" ]; then
+            echo "Found libwebrtc project: $WEBRTC_PROJ"
+            # Remove macOS libSystem.B.dylib from linker flags
+            sed -i '' 's|/usr/lib/libSystem.B.dylib|$(SDKROOT)/usr/lib/libSystem.B.dylib|g' "$WEBRTC_PROJ/project.pbxproj"
+            # Ensure SDKROOT is set for iOS
+            sed -i '' 's|SDKROOT = macosx|SDKROOT = iphoneos|g' "$WEBRTC_PROJ/project.pbxproj"
+            # Ensure deployment target is iOS
+            sed -i '' "s|IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*|IPHONEOS_DEPLOYMENT_TARGET = ${{ github.event.inputs.ios_version }}|g" "$WEBRTC_PROJ/project.pbxproj"
+            echo "Patched libwebrtc project"
+          else
+            echo "libwebrtc project not found, skipping patch"
+          fi
+
       - name: Build WebKit for iOS device (using build-webkit script)
         run: |
           if [ -f "Tools/Scripts/build-webkit" ]; then
