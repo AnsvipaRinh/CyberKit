@@ -1,0 +1,103 @@
+name: Build CyberKit (Track S) - iOS 18+ WebKit
+
+on:
+  workflow_dispatch:
+    inputs:
+      ios_version:
+        description: 'Target iOS version (e.g., 18.0, 18.1)'
+        required: true
+        default: '18.0'
+      wk_prefix:
+        description: 'WK→WP rename prefix (e.g., WP, WKP)'
+        required: false
+        default: 'WP'
+
+jobs:
+  build-cyberkit:
+    runs-on: macos-14
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
+      IOS_DEPLOYMENT_TARGET: ${{ github.event.inputs.ios_version }}
+      WK_PREFIX: ${{ github.event.inputs.wk_prefix }}
+    steps:
+      - name: Checkout CyberKit (safari-7616 branch)
+        uses: actions/checkout@v4
+        with:
+          repository: CyberKitGroup/CyberKit
+          ref: safari-7616.1.27.211-branch
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app
+          xcodebuild -version
+
+      - name: Apply WK→WP rename
+        run: |
+          export WK_PREFIX=${{ github.event.inputs.wk_prefix }}
+          if [ -f "Tools/Scripts/script_rename.sh" ]; then
+            ./Tools/Scripts/script_rename.sh
+          else
+            echo "script_rename.sh not found, skipping rename"
+          fi
+
+      - name: Build WebKit for iOS device (using build-webkit script)
+        run: |
+          if [ -f "Tools/Scripts/build-webkit" ]; then
+            Tools/Scripts/build-webkit \
+              --ios-device \
+              --target-ios-version=${{ github.event.inputs.ios_version }} \
+              --release
+          else
+            echo "build-webkit not found, trying xcodebuild on workspace"
+            xcodebuild \
+              -workspace WebKit.xcworkspace \
+              -scheme WebKit \
+              -configuration Release \
+              -sdk iphoneos \
+              -arch arm64 \
+              IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              -jobs $(sysctl -n hw.ncpu) \
+              -quiet
+          fi
+
+      - name: Package CyberKit frameworks
+        run: |
+          mkdir -p build/package/Frameworks
+          # Copy built frameworks from WebKitBuild
+          cp -R WebKitBuild/Release/*.framework build/package/Frameworks/ 2>/dev/null || true
+          # Also copy from WebKitBuild/Release-iphoneos if exists
+          cp -R WebKitBuild/Release-iphoneos/*.framework build/package/Frameworks/ 2>/dev/null || true
+          # Also check for build directory
+          cp -R build/Release/*.framework build/package/Frameworks/ 2>/dev/null || true
+          cp -R build/Release-iphoneos/*.framework build/package/Frameworks/ 2>/dev/null || true
+          # Also check for CyberKit-specific framework outputs
+          cp -R WebKitBuild/Release/CyberKit*.framework build/package/Frameworks/ 2>/dev/null || true
+          cp -R WebKitBuild/Release-iphoneos/CyberKit*.framework build/package/Frameworks/ 2>/dev/null || true
+          # Create manifest
+          ls -la build/package/Frameworks/ > build/package/MANIFEST.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cyberkit-ios${{ github.event.inputs.ios_version }}-${{ github.event.inputs.wk_prefix }}
+          path: |
+            build/package/Frameworks/
+            build/package/MANIFEST.txt
+          retention-days: 7
+
+      - name: Create Release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: cyberkit-ios${{ github.event.inputs.ios_version }}-${{ github.event.inputs.wk_prefix }}-${{ github.run_number }}
+          name: CyberKit iOS ${{ github.event.inputs.ios_version }} (${{ github.event.inputs.wk_prefix }}) - Build ${{ github.run_number }}
+          files: |
+            build/package/Frameworks/*.framework
+            build/package/MANIFEST.txt
+          generate_release_notes: true
