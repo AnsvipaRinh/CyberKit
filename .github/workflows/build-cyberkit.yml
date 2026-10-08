@@ -34,14 +34,6 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_15.4.app
           xcodebuild -version
 
-      - name: Configure Xcode for embedded development (if script exists)
-        run: |
-          if [ -f "Tools/Scripts/configure-xcode-for-embedded-development" ]; then
-            sudo Tools/Scripts/configure-xcode-for-embedded-development
-          else
-            echo "configure-xcode-for-embedded-development not found, skipping"
-          fi
-
       - name: Apply WK→WP rename
         run: |
           export WK_PREFIX=${{ github.event.inputs.wk_prefix }}
