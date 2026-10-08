@@ -21,10 +21,11 @@ jobs:
       IOS_DEPLOYMENT_TARGET: ${{ github.event.inputs.ios_version }}
       WK_PREFIX: ${{ github.event.inputs.wk_prefix }}
     steps:
-      - name: Checkout CyberKit
+      - name: Checkout CyberKit (safari-7616 branch)
         uses: actions/checkout@v4
         with:
           repository: CyberKitGroup/CyberKit
+          ref: safari-7616.1.27.211-branch
           submodules: recursive
           fetch-depth: 0
 
@@ -33,14 +34,17 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_15.4.app
           xcodebuild -version
 
-      - name: Configure Xcode for embedded development
+      - name: Configure Xcode for embedded development (if script exists)
         run: |
-          sudo Tools/Scripts/configure-xcode-for-embedded-development
+          if [ -f "Tools/Scripts/configure-xcode-for-embedded-development" ]; then
+            sudo Tools/Scripts/configure-xcode-for-embedded-development
+          else
+            echo "configure-xcode-for-embedded-development not found, skipping"
+          fi
 
       - name: Apply WK→WP rename
         run: |
           export WK_PREFIX=${{ github.event.inputs.wk_prefix }}
-          # CyberKit's rename script
           if [ -f "Tools/Scripts/script_rename.sh" ]; then
             ./Tools/Scripts/script_rename.sh
           else
@@ -49,12 +53,20 @@ jobs:
 
       - name: Build WebKit for iOS device
         run: |
-          Tools/Scripts/build-webkit \
-            --ios-device \
-            --target-ios-version=${{ github.event.inputs.ios_version }} \
-            --release \
-            --no-build-testing \
-            --cmake-args="-DCMAKE_OSX_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }}"
+          if [ -f "Tools/Scripts/build-webkit" ]; then
+            Tools/Scripts/build-webkit \
+              --ios-device \
+              --target-ios-version=${{ github.event.inputs.ios_version }} \
+              --release \
+              --no-build-testing \
+              --cmake-args="-DCMAKE_OSX_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }}"
+          else
+            echo "build-webkit not found, trying alternative build method"
+            # Alternative: use xcodebuild directly
+            xcodebuild -project WebKit.xcodeproj -scheme WebKit -configuration Release -sdk iphoneos \
+              IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
+              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+          fi
 
       - name: Package CyberKit frameworks
         run: |
@@ -63,6 +75,9 @@ jobs:
           cp -R WebKitBuild/Release/*.framework build/package/Frameworks/ 2>/dev/null || true
           # Also copy from WebKitBuild/Release-iphoneos if exists
           cp -R WebKitBuild/Release-iphoneos/*.framework build/package/Frameworks/ 2>/dev/null || true
+          # Also check for CyberKit-specific framework outputs
+          cp -R WebKitBuild/Release/CyberKit*.framework build/package/Frameworks/ 2>/dev/null || true
+          cp -R WebKitBuild/Release-iphoneos/CyberKit*.framework build/package/Frameworks/ 2>/dev/null || true
           # Create manifest
           ls -la build/package/Frameworks/ > build/package/MANIFEST.txt
 
