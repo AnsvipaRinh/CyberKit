@@ -36,7 +36,6 @@ jobs:
 
       - name: Install Ruby (for build scripts)
         run: |
-          # Ensure Ruby is available for build scripts
           which ruby || brew install ruby
           ruby --version
 
@@ -55,8 +54,7 @@ jobs:
             Tools/Scripts/build-webkit \
               --ios-device \
               --target-ios-version=${{ github.event.inputs.ios_version }} \
-              --release \
-              --no-build-testing
+              --release
           else
             echo "build-webkit not found, trying xcodebuild on workspace"
             xcodebuild \
