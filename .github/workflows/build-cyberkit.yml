@@ -43,59 +43,31 @@ jobs:
             echo "script_rename.sh not found, skipping rename"
           fi
 
-      - name: Fix libwebrtc for iOS (patch macOS libSystem.B.dylib)
+      - name: Build WebKit for iOS device (using xcodebuild directly)
         run: |
-          # Find and patch libwebrtc xcodeproj to use iOS SDK libSystem
-          WEBRTC_PROJ=$(find . -name "*.xcodeproj" -path "*/libwebrtc/*" | head -1)
-          if [ -n "$WEBRTC_PROJ" ]; then
-            echo "Found libwebrtc project: $WEBRTC_PROJ"
-            # Remove macOS libSystem.B.dylib from linker flags
-            sed -i '' 's|/usr/lib/libSystem.B.dylib|$(SDKROOT)/usr/lib/libSystem.B.dylib|g' "$WEBRTC_PROJ/project.pbxproj"
-            # Ensure SDKROOT is set for iOS
-            sed -i '' 's|SDKROOT = macosx|SDKROOT = iphoneos|g' "$WEBRTC_PROJ/project.pbxproj"
-            # Ensure deployment target is iOS
-            sed -i '' "s|IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*|IPHONEOS_DEPLOYMENT_TARGET = ${{ github.event.inputs.ios_version }}|g" "$WEBRTC_PROJ/project.pbxproj"
-            echo "Patched libwebrtc project"
-          else
-            echo "libwebrtc project not found, skipping patch"
-          fi
-
-      - name: Build WebKit for iOS device (using build-webkit script)
-        run: |
-          if [ -f "Tools/Scripts/build-webkit" ]; then
-            Tools/Scripts/build-webkit \
-              --ios-device \
-              --target-ios-version=${{ github.event.inputs.ios_version }} \
-              --release
-          else
-            echo "build-webkit not found, trying xcodebuild on workspace"
-            xcodebuild \
-              -workspace WebKit.xcworkspace \
-              -scheme WebKit \
-              -configuration Release \
-              -sdk iphoneos \
-              -arch arm64 \
-              IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
-              CODE_SIGN_IDENTITY="" \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO \
-              -jobs $(sysctl -n hw.ncpu) \
-              -quiet
-          fi
+          # Use xcodebuild directly on workspace - more reliable than build-webkit script
+          xcodebuild \
+            -workspace CyberKit.xcworkspace \
+            -scheme CyberKit \
+            -configuration Release \
+            -sdk iphoneos \
+            -arch arm64 \
+            IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            -jobs $(sysctl -n hw.ncpu) \
+            -quiet
 
       - name: Package CyberKit frameworks
         run: |
           mkdir -p build/package/Frameworks
-          # Copy built frameworks from WebKitBuild
-          cp -R WebKitBuild/Release/*.framework build/package/Frameworks/ 2>/dev/null || true
-          # Also copy from WebKitBuild/Release-iphoneos if exists
-          cp -R WebKitBuild/Release-iphoneos/*.framework build/package/Frameworks/ 2>/dev/null || true
-          # Also check for build directory
+          # Copy built frameworks from build directory
           cp -R build/Release/*.framework build/package/Frameworks/ 2>/dev/null || true
           cp -R build/Release-iphoneos/*.framework build/package/Frameworks/ 2>/dev/null || true
-          # Also check for CyberKit-specific framework outputs
-          cp -R WebKitBuild/Release/CyberKit*.framework build/package/Frameworks/ 2>/dev/null || true
-          cp -R WebKitBuild/Release-iphoneos/CyberKit*.framework build/package/Frameworks/ 2>/dev/null || true
+          # Also check WebKitBuild
+          cp -R WebKitBuild/Release/*.framework build/package/Frameworks/ 2>/dev/null || true
+          cp -R WebKitBuild/Release-iphoneos/*.framework build/package/Frameworks/ 2>/dev/null || true
           # Create manifest
           ls -la build/package/Frameworks/ > build/package/MANIFEST.txt
 
