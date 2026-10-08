@@ -43,25 +43,28 @@ jobs:
             echo "script_rename.sh not found, skipping rename"
           fi
 
-      - name: Build WebKit for iOS device (using xcodebuild directly)
+      - name: Build WebKit for iOS device (using build-webkit script)
         run: |
-          # Try to find the correct scheme and project
-          echo "Available schemes:"
-          xcodebuild -list -project WebKit.xcodeproj 2>/dev/null || xcodebuild -list -workspace WebKit.xcworkspace 2>/dev/null || echo "No project/workspace found"
-          
-          # Build with xcodebuild directly for iOS device
-          xcodebuild \
-            -project WebKit.xcodeproj \
-            -scheme WebKit \
-            -configuration Release \
-            -sdk iphoneos \
-            -arch arm64 \
-            IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            -jobs $(sysctl -n hw.ncpu) \
-            -quiet
+          if [ -f "Tools/Scripts/build-webkit" ]; then
+            Tools/Scripts/build-webkit \
+              --ios-device \
+              --target-ios-version=${{ github.event.inputs.ios_version }} \
+              --release
+          else
+            echo "build-webkit not found, trying xcodebuild on workspace"
+            xcodebuild \
+              -workspace WebKit.xcworkspace \
+              -scheme WebKit \
+              -configuration Release \
+              -sdk iphoneos \
+              -arch arm64 \
+              IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              -jobs $(sysctl -n hw.ncpu) \
+              -quiet
+          fi
 
       - name: Package CyberKit frameworks
         run: |
