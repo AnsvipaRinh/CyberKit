@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       ios_version:
-        description: 'Target iOS version (e.g., 18.0, 18.1)'
+        description: 'Target iOS version (e.g., 17.5, 17.0)'
         required: true
-        default: '18.0'
+        default: '17.5'
       wk_prefix:
         description: 'WK→WP rename prefix (e.g., WP, WKP)'
         required: false
