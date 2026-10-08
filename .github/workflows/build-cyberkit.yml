@@ -43,22 +43,25 @@ jobs:
             echo "script_rename.sh not found, skipping rename"
           fi
 
-      - name: Build WebKit for iOS device
+      - name: Build WebKit for iOS device (using xcodebuild directly)
         run: |
-          if [ -f "Tools/Scripts/build-webkit" ]; then
-            Tools/Scripts/build-webkit \
-              --ios-device \
-              --target-ios-version=${{ github.event.inputs.ios_version }} \
-              --release \
-              --no-build-testing \
-              --cmake-args="-DCMAKE_OSX_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }}"
-          else
-            echo "build-webkit not found, trying alternative build method"
-            # Alternative: use xcodebuild directly
-            xcodebuild -project WebKit.xcodeproj -scheme WebKit -configuration Release -sdk iphoneos \
-              IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
-              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
-          fi
+          # Try to find the correct scheme and project
+          echo "Available schemes:"
+          xcodebuild -list -project WebKit.xcodeproj 2>/dev/null || xcodebuild -list -workspace WebKit.xcworkspace 2>/dev/null || echo "No project/workspace found"
+          
+          # Build with xcodebuild directly for iOS device
+          xcodebuild \
+            -project WebKit.xcodeproj \
+            -scheme WebKit \
+            -configuration Release \
+            -sdk iphoneos \
+            -arch arm64 \
+            IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            -jobs $(sysctl -n hw.ncpu) \
+            -quiet
 
       - name: Package CyberKit frameworks
         run: |
@@ -67,6 +70,9 @@ jobs:
           cp -R WebKitBuild/Release/*.framework build/package/Frameworks/ 2>/dev/null || true
           # Also copy from WebKitBuild/Release-iphoneos if exists
           cp -R WebKitBuild/Release-iphoneos/*.framework build/package/Frameworks/ 2>/dev/null || true
+          # Also check for build directory
+          cp -R build/Release/*.framework build/package/Frameworks/ 2>/dev/null || true
+          cp -R build/Release-iphoneos/*.framework build/package/Frameworks/ 2>/dev/null || true
           # Also check for CyberKit-specific framework outputs
           cp -R WebKitBuild/Release/CyberKit*.framework build/package/Frameworks/ 2>/dev/null || true
           cp -R WebKitBuild/Release-iphoneos/CyberKit*.framework build/package/Frameworks/ 2>/dev/null || true
