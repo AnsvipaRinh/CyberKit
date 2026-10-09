@@ -15,7 +15,33 @@ import io
 
 TARGET = os.path.join("Source", "WTF", "wtf", "spi", "darwin", "XPCSPI.h")
 
-HAS_INCLUDE_GUARD = """#if !defined(__has_include)
+SDK_BRANCH_OLD = """#if PLATFORM(MAC) || USE(APPLE_INTERNAL_SDK)
+#include <xpc/xpc.h>
+#else
+"""
+
+SDK_BRANCH_NEW = """#if PLATFORM(MAC) || USE(APPLE_INTERNAL_SDK)
+#include <xpc/xpc.h>
+#elif defined(__has_include) && __has_include(<xpc/activity.h>)
+// Modern SDKs (iOS 16.4+/macOS 13.3+ SDK) ship the full vendored XPC SPI
+// (xpc/activity.h with XPC_ACTIVITY_STATE_*, xpc_*_t as real structs,
+// OS_OBJECT_DECL support for xpc_object). Using the SDK spelling avoids the
+// duplicate-protocol/duplicate-enumerator/typedef-redefinition errors.
+#include <xpc/xpc.h>
+#else
+"""
+
+ENUM_GUARD_OLD = """enum {
+    XPC_ACTIVITY_STATE_CHECK_IN,
+    XPC_ACTIVITY_STATE_WAIT,
+    XPC_ACTIVITY_STATE_RUN,
+    XPC_ACTIVITY_STATE_DEFER,
+    XPC_ACTIVITY_STATE_CONTINUE,
+    XPC_ACTIVITY_STATE_DONE,
+};
+typedef long xpc_activity_state_t;"""
+
+ENUM_GUARD_NEW = """#if !defined(__has_include)
 #define __has_include(x) 0
 #endif
 #if !__has_include(<xpc/activity.h>)
@@ -30,38 +56,6 @@ enum {
 typedef long xpc_activity_state_t;
 #endif"""
 
-ENUM_ORIGINAL = """enum {
-    XPC_ACTIVITY_STATE_CHECK_IN,
-    XPC_ACTIVITY_STATE_WAIT,
-    XPC_ACTIVITY_STATE_RUN,
-    XPC_ACTIVITY_STATE_DEFER,
-    XPC_ACTIVITY_STATE_CONTINUE,
-    XPC_ACTIVITY_STATE_DONE,
-};
-typedef long xpc_activity_state_t;"""
-
-VOID_TYPEDEFS_ORIGINAL = """#else // OS_OBJECT_USE_OBJC
-
-typedef void* xpc_object_t;
-typedef void* xpc_connection_t;
-typedef void* xpc_endpoint_t;
-typedef void* xpc_activity_t;
-
-#define XPC_GLOBAL_OBJECT(object) (&(object))
-
-#endif // OS_OBJECT_USE_OBJC"""
-
-VOID_TYPEDEFS_NEW = """#elif !defined(__has_include) || !__has_include(<xpc/activity.h>)
-
-typedef void* xpc_object_t;
-typedef void* xpc_connection_t;
-typedef void* xpc_endpoint_t;
-typedef void* xpc_activity_t;
-
-#define XPC_GLOBAL_OBJECT(object) (&(object))
-
-#endif // OS_OBJECT_USE_OBJC"""
-
 
 def main():
     root = sys.argv[1]
@@ -73,18 +67,22 @@ def main():
         src = f.read()
     changed = False
 
-    if "!__has_include(<xpc/activity.h>)\nenum {" not in src:
-        if ENUM_ORIGINAL not in src:
-            print("  ! enum anchor not found; skipping (already patched?)")
+    # 1. SDK branch: when the SDK ships the XPC SPI, use it wholesale instead
+    #    of the vendored block (which now collides with the SDK's ObjC
+    #    protocol form on new toolchains).
+    if "elif defined(__has_include) && __has_include(<xpc/activity.h>)" not in src:
+        if SDK_BRANCH_OLD not in src:
+            print("  ! SDK-branch anchor not found; skipping (already patched?)")
         else:
-            src = src.replace(ENUM_ORIGINAL, HAS_INCLUDE_GUARD)
+            src = src.replace(SDK_BRANCH_OLD, SDK_BRANCH_NEW)
             changed = True
 
-    if VOID_TYPEDEFS_NEW not in src:
-        if VOID_TYPEDEFS_ORIGINAL not in src:
-            print("  ! os-object anchor not found; skipping (already patched?)")
+    # 2. Legacy fallback enum for old SDKs only.
+    if "#if !__has_include(<xpc/activity.h>)" not in src:
+        if ENUM_GUARD_OLD not in src:
+            print("  ! enum anchor not found; skipping (already patched?)")
         else:
-            src = src.replace(VOID_TYPEDEFS_ORIGINAL, VOID_TYPEDEFS_NEW)
+            src = src.replace(ENUM_GUARD_OLD, ENUM_GUARD_NEW)
             changed = True
 
     if changed:
