@@ -1,14 +1,14 @@
-name: Build CyberKit (Track S) - iOS 18+ WebKit
+name: Build CyberKit (Track S) - renamed WebKit for iOS 14
 
 on:
   workflow_dispatch:
     inputs:
       ios_version:
-        description: 'Target iOS version (e.g., 17.5, 17.0)'
+        description: 'Target iOS deployment version (P0: 14.x)'
         required: true
-        default: '17.5'
+        default: '14.0'
       wk_prefix:
-        description: 'WK→WP rename prefix (e.g., WP, WKP)'
+        description: 'ObjC class rename prefix (WKWebView -> <prefix>WebView)'
         required: false
         default: 'WP'
 
@@ -21,10 +21,12 @@ jobs:
       IOS_DEPLOYMENT_TARGET: ${{ github.event.inputs.ios_version }}
       WK_PREFIX: ${{ github.event.inputs.wk_prefix }}
     steps:
-      - name: Checkout CyberKit (safari-7616 branch)
+      # Дизайн: форк CyberKit несёт наши rename-ассеты в .github/wp-ci/
+      # (кладёт push-to-fork.sh). Отдельного checkout нашего репо НЕТ —
+      # у него нет remote, на раннере это бы не сработало.
+      - name: Checkout CyberKit fork (safari-7616 branch + our wp-ci assets)
         uses: actions/checkout@v4
         with:
-          repository: CyberKitGroup/CyberKit
           ref: safari-7616.1.27.211-branch
           submodules: recursive
           fetch-depth: 0
@@ -39,7 +41,22 @@ jobs:
           which ruby || brew install ruby
           ruby --version
 
-      - name: Apply WK→WP rename
+      - name: Apply SDK-compat patch for vendored XPC SPI (iPhoneOS 16.4+ SDK conflict)
+        # Root cause of CI failure: WTF's vendored XPCSPI.h re-declares
+        # XPC_ACTIVITY_STATE_* / xpc_*_t, which the modern iOS SDK ships in
+        # <xpc/xpc.h> (via activity.h) -> hard redefinition errors as -Werror.
+        # libwebrtc (vpx/aom/absl) itself compiles fine; not the blocker.
+        run: |
+          python3 .github/wp-ci/wp-xpcspi-compat.py .
+
+      - name: Apply WP class rename (OUR step — ObjC classes, fixes M5 co-load)        # \b-границы не задевают C API (WKPageRef и т.п.); заголовки включаем:
+        # @interface-декларации обязаны переименоваться вместе с .mm.
+        # Ассеты лежат в форке (.github/wp-ci/), кладёт push-to-fork.sh.
+        run: |
+          WP_ALLOW_IN_PLACE=1 bash .github/wp-ci/wp-rename-classes.sh \
+            apply ./Source --include-headers
+
+      - name: Apply CyberKit framework rename (THEIR script — frameworks/bundles + com.apple -> com.matthewbenedict)
         run: |
           export WK_PREFIX=${{ github.event.inputs.wk_prefix }}
           if [ -f "Tools/Scripts/script_rename.sh" ]; then
@@ -48,12 +65,21 @@ jobs:
             echo "script_rename.sh not found, skipping rename"
           fi
 
-      - name: Build WebKit for iOS device (using build-webkit script)
+      - name: Apply WP bundle IDs (OUR step — com.matthewbenedict.* -> space.webportkit.*)
+        # ПОСЛЕ их скрипта (он создаёт matthewbenedict-ID). XPC/песочницы/кэши обязаны быть
+        # нашими, иначе коллизия с установленным CyberKit на том же устройстве. Замерено: 353.
         run: |
+          WP_ALLOW_IN_PLACE=1 bash .github/wp-ci/wp-rename-ids.sh apply ./Source
+
+      - name: Build WebKit for iOS device (using build-webkit script)
+        # NOTE: stock build-webkit has NO --target-ios-version flag (it would fail).
+        # Deployment target is forced via IPHONEOS_DEPLOYMENT_TARGET env, honoured
+        # by both build-webkit and the xcodebuild fallback. See AGENTS_SYNC journal.
+        run: |
+          export IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }}
           if [ -f "Tools/Scripts/build-webkit" ]; then
             Tools/Scripts/build-webkit \
               --ios-device \
-              --target-ios-version=${{ github.event.inputs.ios_version }} \
               --release
           else
             echo "build-webkit not found, trying xcodebuild on workspace"
