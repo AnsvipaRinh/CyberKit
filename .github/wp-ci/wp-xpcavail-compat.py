@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""WebPortKit Track S: clear SDK "unavailable" annotation on private XPC SPI.
+"""WebPortKit Track S: route private XPC SPI calls through dlsym.
 
-iOS 16.4+ SDKs declare private XPC SPI with __API_UNAVAILABLE for iOS, so
-WebKit's Inspector code that calls it fails with e.g.
-    'xpc_connection_create_mach_service' is unavailable: not available on iOS
+Modern iOS SDKs mark xpc_connection_create_mach_service /
+xpc_connection_set_event_handler as unavailable for iOS, so direct call sites
+in WebKit's Inspector code fail to compile. Redeclaring does not clear the
+availability attribute, but taking the address of the symbol by NAME at
+runtime via dlsym involves no compile-time symbol reference, so it compiles
+against the new SDK and resolves the private function on device.
 
-A plain re-declaration without availability clears the attribute inherited
-from the SDK header. Signatures are copied verbatim from WTF's vendored
-XPCSPI.h so they remain compatible with the call sites.
-
-Declarations are inserted at file scope (after the last #include/#import) —
-a declaration inside a function body is legal but placement-sensitive, so
-top-of-file is both safe and readable.
+Only the two Inspector TUs that use the SPI are patched; the vendored
+XPCSPI.h declarations remain untouched (declarations are not errors).
 
 Idempotent. Usage: wp-xpcavail-compat.py <checkout-root>
 """
@@ -25,23 +23,32 @@ FILES = [
     "Source/CyberScriptCore/inspector/remote/cocoa/RemoteInspectorXPCConnection.mm",
 ]
 
-REDECLS = [
-    "xpc_connection_create_mach_service",
-    "xpc_connection_set_event_handler",
+CALLS = [
+    ("xpc_connection_create_mach_service", "WP_m5_xpc_make_service"),
+    ("xpc_connection_set_event_handler", "WP_m5_xpc_set_handler"),
 ]
 
-DECLS = {
-    "xpc_connection_create_mach_service":
-        "extern \"C\" xpc_connection_t xpc_connection_create_mach_service(const char* name, dispatch_queue_t, uint64_t flags);",
-    "xpc_connection_set_event_handler":
-        "extern \"C\" void xpc_connection_set_event_handler(xpc_connection_t, xpc_handler_t);",
+HELPER_MARKER = "WP_m5_xpc_dlsym_helpers"
+
+HELPERS = """
+// WebPortKit Track S: private XPC SPI marked __API_UNAVAILABLE by modern SDKs.
+// Resolve the symbols at runtime by name (no compile-time reference).
+// WP_m5_xpc_dlsym_helpers
+#include <dlfcn.h>
+static inline xpc_connection_t WP_m5_xpc_make_service(const char *name, dispatch_queue_t queue, uint64_t flags)
+{
+    typedef xpc_connection_t (*fn_t)(const char *, dispatch_queue_t, uint64_t);
+    static fn_t fn;
+    if (!fn) fn = (fn_t)dlsym(RTLD_DEFAULT, "xpc_connection_create_mach_service");
+    return fn ? fn(name, queue, flags) : nullptr;
 }
-
-GUARD_OPEN = "#if defined(__has_include) && __has_include(<xpc/activity.h>)"
-
-COMMENT = """// WebPortKit Track S: modern Apple SDKs mark private XPC SPI as unavailable
-// on iOS while WebKit still uses it; an unannotated redeclaration clears
-// the availability inherited from the SDK header.
+static inline void WP_m5_xpc_set_handler(xpc_connection_t connection, xpc_handler_t handler)
+{
+    typedef void (*fn_t)(xpc_connection_t, xpc_handler_t);
+    static fn_t fn;
+    if (!fn) fn = (fn_t)dlsym(RTLD_DEFAULT, "xpc_connection_set_event_handler");
+    if (fn) fn(connection, handler);
+}
 """
 
 
@@ -55,22 +62,24 @@ def main():
         with io.open(path, "r", encoding="utf-8") as f:
             src = f.read()
 
-        missing = [s for s in REDECLS
-                   if DECLS[s] not in src and (s + "(") in src]
-        if not missing:
-            print("  = %s already patched (or no use site)" % rel)
-            continue
+        changed = False
+        if HELPER_MARKER not in src:
+            matches = list(re.finditer(r"^\s*#[ \t]*(?:import|include)\b.*$",
+                                       src, flags=re.M))
+            pos = matches[-1].end() if matches else 0
+            src = src[:pos] + "\n" + HELPERS + src[pos:]
+            changed = True
 
-        # Insert at file scope: after the last #include or #import line.
-        matches = list(re.finditer(r"^\s*#[ \t]*(?:import|include)\b.*$", src,
-                                   flags=re.M))
-        pos = matches[-1].end() if matches else 0
+        for orig, repl in CALLS:
+            src = re.sub(r"(?<![\w])" + re.escape(orig) + r"\(",
+                         repl + "(", src)
+            if repl not in src:
+                print("  ! %s: call site for %s not found" % (rel, orig))
 
-        block = COMMENT + GUARD_OPEN + "\n" + "\n".join(DECLS[s] for s in missing) + "\n#endif\n"
-        src = src[:pos] + "\n" + block + src[pos:]
-        with io.open(path, "w", encoding="utf-8") as f:
-            f.write(src)
-        print("  + %s: file-scope redeclarations added (%d)" % (rel, len(missing)))
+        if changed or True:
+            with io.open(path, "w", encoding="utf-8") as f:
+                f.write(src)
+            print("  + %s: XPC SPI calls routed through dlsym helpers" % rel)
     return 0
 
 
