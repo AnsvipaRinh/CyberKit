@@ -57,6 +57,13 @@ jobs:
         run: |
           python3 .github/wp-ci/wp-libwebrtc-compat.py .
 
+      - name: Apply SDK-compat patch for unavailable private XPC SPI (iOS 16.4+ SDK)
+        # CyberKit Inspector calls xpc_connection_create_mach_service, which the
+        # modern iOS SDK marks "__API_UNAVAILABLE on iOS". Unannotated
+        # redeclarations restore the pre-SDK behaviour.
+        run: |
+          python3 .github/wp-ci/wp-xpcavail-compat.py .
+
       - name: Apply WP class rename (OUR step — ObjC classes, fixes M5 co-load)        # \b-границы не задевают C API (WKPageRef и т.п.); заголовки включаем:
         # @interface-декларации обязаны переименоваться вместе с .mm.
         # Ассеты лежат в форке (.github/wp-ci/), кладёт push-to-fork.sh.
@@ -88,7 +95,8 @@ jobs:
           if [ -f "Tools/Scripts/build-webkit" ]; then
             Tools/Scripts/build-webkit \
               --ios-device \
-              --release
+              --release \
+              ARCHS=arm64e ONLY_ACTIVE_ARCH=NO
           else
             echo "build-webkit not found, trying xcodebuild on workspace"
             xcodebuild \
