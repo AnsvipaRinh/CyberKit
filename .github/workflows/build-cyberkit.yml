@@ -69,6 +69,10 @@ jobs:
         run: |
           python3 .github/wp-ci/wp-objcruntime-compat.py .
 
+      - name: Apply SDK-compat patch for readline usage in jsc.cpp (iOS SDK lacks readline)
+        run: |
+          python3 .github/wp-ci/wp-jsc-compat.py .
+
       - name: Apply WP class rename (OUR step — ObjC classes, fixes M5 co-load)        # \b-границы не задевают C API (WKPageRef и т.п.); заголовки включаем:
         # @interface-декларации обязаны переименоваться вместе с .mm.
         # Ассеты лежат в форке (.github/wp-ci/), кладёт push-to-fork.sh.
