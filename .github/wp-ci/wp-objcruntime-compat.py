@@ -13,12 +13,16 @@ import io
 import os
 import sys
 
-OLD = "#import <objc/objc-runtime.h>"
-NEW = "#import <objc/runtime.h>"
-OLD_C = "#include <objc/objc-runtime.h>"
-NEW_C = "#include <objc/runtime.h>"
 EXTS = (".h", ".m", ".mm", ".c", ".cpp", ".cc", ".hpp")
 SKIP_DIRS = ("ThirdParty/libwebrtc", "WTF/icu", ".git")
+
+# Legacy ObjC umbrella headers removed from modern SDKs -> modern spelling.
+LEGACY_MAP = {
+    "objc/objc-runtime.h": "objc/runtime.h",
+    "objc/Protocol.h": "objc/runtime.h",
+    "objc/objc-class.h": "objc/runtime.h",
+    "objc/objc-object.h": "objc/runtime.h",
+}
 
 
 def main():
@@ -38,15 +42,16 @@ def main():
             except OSError:
                 continue
             out = src
-            if OLD in out:
-                out = out.replace(OLD, NEW)
-            if OLD_C in out:
-                out = out.replace(OLD_C, NEW_C)
+            for legacy, modern in LEGACY_MAP.items():
+                for kw in ("import", "include"):
+                    src_line = "#%s <%s>" % (kw, legacy)
+                    if src_line in out:
+                        out = out.replace(src_line, "#%s <%s>" % (kw, modern))
             if out != src:
                 with io.open(path, "w", encoding="utf-8") as f:
                     f.write(out)
                 changed += 1
-                print("  + %s: objc-runtime include fixed" % os.path.relpath(path, root))
+                print("  + %s: legacy ObjC includes fixed" % os.path.relpath(path, root))
     if not changed:
         print("  = objc-runtime includes already clean")
     return 0
