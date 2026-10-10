@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""WebPortKit Track S: route private XPC SPI calls through dlsym.
+"""WebPortKit Track S: route private XPC SPI through availability-free macros.
 
-Modern iOS SDKs mark xpc_connection_create_mach_service /
-xpc_connection_set_event_handler as unavailable for iOS, so direct call sites
-in WebKit's Inspector code fail to compile. Redeclaring does not clear the
-availability attribute, but taking the address of the symbol by NAME at
-runtime via dlsym involves no compile-time symbol reference, so it compiles
-against the new SDK and resolves the private function on device.
+Modern iOS SDKs declare xpc_connection_create_mach_service /
+xpc_connection_set_event_handler with __API_UNAVAILABLE for iOS, so direct
+call sites in WebKit's Inspector code fail to compile. A redeclaration does
+not clear the attribute, and the Inspector .mm files are compiled together in
+one unified-source TU, so plain helper functions would be defined twice.
 
-Only the two Inspector TUs that use the SPI are patched; the vendored
-XPCSPI.h declarations remain untouched (declarations are not errors).
+We instead install *function-like macros* (identical macro redefinition is
+legal for the preprocessor) that dlsym-resolve the private symbols at runtime
+-- a name lookup involves no compile-time symbol reference, so it compiles
+against the new SDK and resolves on device.
+
+Usage: WP_m5_xpc_make_service(name, queue, flags)
+       WP_m5_xpc_set_handler(connection, handler)
 
 Idempotent. Usage: wp-xpcavail-compat.py <checkout-root>
 """
@@ -28,27 +32,25 @@ CALLS = [
     ("xpc_connection_set_event_handler", "WP_m5_xpc_set_handler"),
 ]
 
-HELPER_MARKER = "WP_m5_xpc_dlsym_helpers"
+MARKER = "WP_m5_xpc_dlsym_macros"
 
-HELPERS = """
-// WebPortKit Track S: private XPC SPI marked __API_UNAVAILABLE by modern SDKs.
-// Resolve the symbols at runtime by name (no compile-time reference).
-// WP_m5_xpc_dlsym_helpers
+BLOCK = """
+// WebPortKit Track S: modern iOS SDKs mark these private XPC symbols
+// "__API_UNAVAILABLE on iOS"; rename-in place of dlsym-resolved macros
+// (identical redefinition across unified sources is legal).
+// WP_m5_xpc_dlsym_macros
 #include <dlfcn.h>
-static inline xpc_connection_t WP_m5_xpc_make_service(const char *name, dispatch_queue_t queue, uint64_t flags)
-{
-    typedef xpc_connection_t (*fn_t)(const char *, dispatch_queue_t, uint64_t);
-    static fn_t fn;
-    if (!fn) fn = (fn_t)dlsym(RTLD_DEFAULT, "xpc_connection_create_mach_service");
-    return fn ? fn(name, queue, flags) : nullptr;
-}
-static inline void WP_m5_xpc_set_handler(xpc_connection_t connection, xpc_handler_t handler)
-{
-    typedef void (*fn_t)(xpc_connection_t, xpc_handler_t);
-    static fn_t fn;
-    if (!fn) fn = (fn_t)dlsym(RTLD_DEFAULT, "xpc_connection_set_event_handler");
-    if (fn) fn(connection, handler);
-}
+#define WP_m5_xpc_make_service(name, queue, flags) ({ \
+    typedef xpc_connection_t (*wp_m5_fn_t)(const char *, dispatch_queue_t, uint64_t); \
+    static wp_m5_fn_t wp_m5_fn; \
+    if (!wp_m5_fn) wp_m5_fn = (wp_m5_fn_t)dlsym(RTLD_DEFAULT, "xpc_connection_create_mach_service"); \
+    wp_m5_fn ? wp_m5_fn(name, queue, flags) : (xpc_connection_t)0; })
+#define WP_m5_xpc_set_handler(connection, handler) do { \
+    typedef void (*wp_m5_fn_t)(xpc_connection_t, xpc_handler_t); \
+    static wp_m5_fn_t wp_m5_fn; \
+    if (!wp_m5_fn) wp_m5_fn = (wp_m5_fn_t)dlsym(RTLD_DEFAULT, "xpc_connection_set_event_handler"); \
+    if (wp_m5_fn) wp_m5_fn(connection, handler); \
+} while (0)
 """
 
 
@@ -63,23 +65,21 @@ def main():
             src = f.read()
 
         changed = False
-        if HELPER_MARKER not in src:
+        if MARKER not in src:
             matches = list(re.finditer(r"^\s*#[ \t]*(?:import|include)\b.*$",
                                        src, flags=re.M))
             pos = matches[-1].end() if matches else 0
-            src = src[:pos] + "\n" + HELPERS + src[pos:]
+            src = src[:pos] + "\n" + BLOCK + src[pos:]
             changed = True
 
         for orig, repl in CALLS:
             src = re.sub(r"(?<![\w])" + re.escape(orig) + r"\(",
                          repl + "(", src)
-            if repl not in src:
-                print("  ! %s: call site for %s not found" % (rel, orig))
 
-        if changed or True:
-            with io.open(path, "w", encoding="utf-8") as f:
-                f.write(src)
-            print("  + %s: XPC SPI calls routed through dlsym helpers" % rel)
+        with io.open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+        print(("  + %s: availability-free XPC macros installed" if changed
+               else "  = %s: XPC macros already present; call sites renormalized") % rel)
     return 0
 
 
