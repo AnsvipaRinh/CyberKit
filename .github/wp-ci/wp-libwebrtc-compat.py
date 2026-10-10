@@ -27,21 +27,27 @@ def main():
         print("  ! %s not found; nothing to do" % TARGET)
         return 0
     with io.open(path, "r", encoding="utf-8") as f:
-        src = f.read()
+        original = f.read()
+    src = original
 
-    had_bare = re.search(r"\t/usr/lib/libSystem\.B\.dylib", src) is not None
+    # 1) Normalize any previously applied (wrong) spelling: quoted .dylib -> .tbd.
+    src = re.sub(
+        r'^(\t+)"\$\(SDKROOT\)/usr/lib/libSystem\.B\.dylib",?$',
+        r'\1"$(SDKROOT)/usr/lib/libSystem.B.tbd",',
+        src, flags=re.M)
 
-    if had_bare:
-        # pbxproj array elements with variables must be quoted.
-        src = re.sub(
-            r"^(\t+)/usr/lib/libSystem\.B\.dylib(,?)$",
-            r'\1"$(SDKROOT)/usr/lib/libSystem.B.dylib"\2',
-            src, flags=re.M)
+    # 2) Raw project spellings: unquoted /usr/lib/libSystem.B.dylib in pbxproj
+    #    arrays must become a quoted, SDK-rooted path; the iPhoneOS SDK ships
+    #    the stub as libSystem.B.tbd, not libSystem.B.dylib.
+    src = re.sub(
+        r"^(\t+)/usr/lib/libSystem\.B\.dylib(,?)$",
+        r'\1"$(SDKROOT)/usr/lib/libSystem.B.tbd"\2',
+        src, flags=re.M)
 
-    if had_bare:
+    if src != original:
         with io.open(path, "w", encoding="utf-8") as f:
             f.write(src)
-        print("  + %s: libSystem.B.dylib now \u0024(SDKROOT)-relative (quoted)" % TARGET)
+        print("  + %s: libSystem path now \u0024(SDKROOT)/usr/lib/libSystem.B.tbd (quoted)" % TARGET)
     else:
         print("  = %s already patched" % TARGET)
     return 0
