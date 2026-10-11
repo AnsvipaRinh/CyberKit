@@ -101,32 +101,54 @@ jobs:
         run: |
           WP_ALLOW_IN_PLACE=1 bash .github/wp-ci/wp-rename-ids.sh apply ./Source
 
-      - name: Build WebKit for iOS device (using build-webkit script)
-        # NOTE: stock build-webkit has NO --target-ios-version flag (it would fail).
-        # Deployment target is forced via IPHONEOS_DEPLOYMENT_TARGET env, honoured
-        # by both build-webkit and the xcodebuild fallback. See AGENTS_SYNC journal.
+      - name: Build donor frameworks (minimal target set, throttled)
+        # The whole-workspace build-webkit run exceeds the GitHub macOS runner's
+        # practical limits (runs consistently died ~55min in, at the CyberCore
+        # stage -- disk/memory pressure on the hosted runner). We build only the
+        # projects needed for the rendering stack + XPC daemons, throttled to
+        # 2 xcodebuild jobs:
+        #   libwebrtc, ANGLE, WTF(+icu), bmalloc, CyberCore, CyberScriptCore,
+        #   CyberKitLegacy, WebGPU, CyberKit (aggregate 'Everything')
+        # Skipping: WebInspectorUI, WebDriver, jsc CLI, minibrowser, all test
+        # targets -- none of them are in the iPhone-side Frameworks/ directory.
         run: |
-          export IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }}
-          if [ -f "Tools/Scripts/build-webkit" ]; then
-            Tools/Scripts/build-webkit \
-              --ios-device \
-              --release \
-              ARCHS=arm64e ONLY_ACTIVE_ARCH=NO
-          else
-            echo "build-webkit not found, trying xcodebuild on workspace"
-            xcodebuild \
-              -workspace CyberKit.xcworkspace \
-              -scheme CyberKit \
-              -configuration Release \
-              -sdk iphoneos \
-              -arch arm64 \
-              IPHONEOS_DEPLOYMENT_TARGET=${{ github.event.inputs.ios_version }} \
-              CODE_SIGN_IDENTITY="" \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO \
-              -jobs $(sysctl -n hw.ncpu) \
-              -quiet
-          fi
+          set -euo pipefail
+          df -h / | sed 's/^/  pre-build: /'
+          export IPHONEOS_DEPLOYMENT_TARGET=14.0
+          SRC="$(xcrun --sdk iphoneos --show-sdk-path)"
+          COMMON="-sdk $SRC -configuration Release ARCHS=arm64e ONLY_ACTIVE_ARCH=NO \
+            IPHONEOS_DEPLOYMENT_TARGET=14.0 CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -jobs 2 \
+            SYMROOT=\$PWD/CyberKitBuild OBJROOT=\$PWD/CyberKitBuild \
+            CONFIGURATION_BUILD_DIR=\$PWD/CyberKitBuild/Release-iphoneos"
+          build_project() {
+            echo "== (helper unused) =="
+          }
+          :
+          # libwebrtc (WebCore dependency), whole project (all targets are deps)
+          xcodebuild -project Source/ThirdParty/libwebrtc/libwebrtc.xcodeproj $COMMON
+          # ANGLE
+          xcodebuild -project Source/ThirdParty/ANGLE/ANGLE.xcodeproj $COMMON -target ANGLE
+          # WTF (+icu)
+          xcodebuild -project Source/WTF/WTF.xcodeproj $COMMON -target WTF
+          xcodebuild -project Source/WTF/WTF.xcodeproj $COMMON -target icu
+          # bmalloc
+          xcodebuild -project Source/bmalloc/bmalloc.xcodeproj $COMMON -target bmalloc
+          # WebGPU (frameworks used by the GPU path)
+          [ -d Source/WebGPU/WebGPU.xcodeproj ] && xcodebuild -project Source/WebGPU/WebGPU.xcodeproj $COMMON -target WebGPU || echo "  (WebGPU project absent, skipped)"
+          # CyberCore (legacy WebCore)
+          xcodebuild -project Source/CyberCore/CyberCore.xcodeproj $COMMON -target CyberCore
+          # CyberScriptCore (JSC)
+          xcodebuild -project Source/CyberScriptCore/CyberScriptCore.xcodeproj $COMMON -target CyberScriptCore
+          # CyberKitLegacy
+          xcodebuild -project Source/CyberKitLegacy/CyberKitLegacy.xcodeproj $COMMON -target CyberKitLegacy
+          # CyberKit: main framework + XPC daemons (WebContent/Networking/GPU),
+          # webpushd/adattributiond daemons and the platform lib. Explicit targets
+          # (not the 'Everything' aggregate) to avoid building test runners.
+          for t in CyberKit WebContent Networking GPU webpushd adattributiond CyberKitPlatform; do
+            xcodebuild -project Source/CyberKit/CyberKit.xcodeproj $COMMON -target "$t"
+          done
+          df -h / | sed 's/^/  post-build: /'
 
       - name: Package CyberKit frameworks
         run: |
