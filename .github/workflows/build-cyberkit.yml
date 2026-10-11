@@ -36,10 +36,20 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_15.4.app
           xcodebuild -version
 
-      - name: Install Ruby (for build scripts)
+      - name: Install build dependencies (Ruby, gperf, bison, flex, ninja, cmake)
+        # WebKit's derived-sources steps shell out to these. Missing gperf made
+        # CyberCore's process-css-properties.py die right where every hosted run
+        # stopped (no error output, job ended within ~2 min).
         run: |
+          set -e
           which ruby || brew install ruby
           ruby --version
+          which gperf || brew install gperf
+          which bison || brew install bison
+          which flex   || brew install flex
+          which ninja  || (brew install ninja || echo "  ninja missing (optional)")
+          which cmake  || brew install cmake
+          gperf --version | head -1
 
       - name: Apply SDK-compat patch for vendored XPC SPI (iPhoneOS 16.4+ SDK conflict)
         # Root cause of CI failure: WTF's vendored XPCSPI.h re-declares
@@ -120,7 +130,9 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=14.0 CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -jobs 2 \
             SYMROOT=\$PWD/CyberKitBuild OBJROOT=\$PWD/CyberKitBuild \
-            CONFIGURATION_BUILD_DIR=\$PWD/CyberKitBuild/Release-iphoneos"
+            CONFIGURATION_BUILD_DIR=\$PWD/CyberKitBuild/Release-iphoneos \
+            FRAMEWORK_SEARCH_PATHS=\\\"\$SRC/System/Library/Frameworks \$PWD/CyberKitBuild/Release-iphoneos\\\" \
+            LIBRARY_SEARCH_PATHS=\\\"\$SRC/usr/lib \$PWD/CyberKitBuild/Release-iphoneos\\\""
           build_project() {
             echo "== (helper unused) =="
           }
@@ -135,12 +147,15 @@ jobs:
           # WTF (+icu)
           xcodebuild -project Source/WTF/WTF.xcodeproj $COMMON -target WTF
           xcodebuild -project Source/WTF/WTF.xcodeproj $COMMON -target icu
-          # WebGPU (frameworks used by the GPU path)
-          [ -d Source/WebGPU/WebGPU.xcodeproj ] && xcodebuild -project Source/WebGPU/WebGPU.xcodeproj $COMMON -target WebGPU || echo "  (WebGPU project absent, skipped)"
-          # CyberCore (legacy WebCore)
-          xcodebuild -project Source/CyberCore/CyberCore.xcodeproj $COMMON -target CyberCore
-          # CyberScriptCore (JSC)
+          # CyberScriptCore (JSC) must precede everything that links it:
+          # WebGPU and CyberCore both do ("-framework CyberScriptCore").
           xcodebuild -project Source/CyberScriptCore/CyberScriptCore.xcodeproj $COMMON -target CyberScriptCore
+          # WebGPU intentionally NOT built: CyberCore links it weakly
+          # (LC_LOAD_WEAK_DYLIB), its link step needs CyberScriptCore built and
+          # it costs ~10 min of runner time that the hosted runners do not have.
+          echo "  (WebGPU skipped - weak dep, runner budget)"
+          # CyberCore (legacy WebCore)
+          xcodebuild -project Source/CyberCore/CyberCore.xcodeproj $COMMON -target CyberCore -jobs 1 COMPILER_INDEX_STORE_ENABLE=NO
           # CyberKitLegacy
           xcodebuild -project Source/CyberKitLegacy/CyberKitLegacy.xcodeproj $COMMON -target CyberKitLegacy
           # CyberKit: main framework + XPC daemons (WebContent/Networking/GPU),
