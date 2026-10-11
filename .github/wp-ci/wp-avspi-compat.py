@@ -24,6 +24,25 @@ NEW = ("#if !USE(APPLE_INTERNAL_SDK) && "
        "(!defined(__IPHONE_OS_VERSION_MAX_ALLOWED) || __IPHONE_OS_VERSION_MAX_ALLOWED < 170000)\n"
        "@interface AVVideoPerformanceMetrics : NSObject")
 
+# The internal-SDK #else branch (category adding DisplayComposited properties)
+# must be guarded too: on iOS 17.4+ SDK the class is API_AVAILABLE(ios(17.4)),
+# which fails under -Werror,-Wunguarded-availability-new.
+CATEGORY = """#else
+@interface AVVideoPerformanceMetrics (AVVideoPerformanceMetricsDisplayCompositedVideoFrames)
+@property (nonatomic, readonly) unsigned long numberOfDisplayCompositedVideoFrames;
+@property (nonatomic, readonly) unsigned long numberOfNonDisplayCompositedVideoFrames;
+@end
+#endif
+"""
+CATEGORY_GUARDED = """#elif (!defined(__IPHONE_OS_VERSION_MAX_ALLOWED) || __IPHONE_OS_VERSION_MAX_ALLOWED < 170000)
+@interface AVVideoPerformanceMetrics (AVVideoPerformanceMetricsDisplayCompositedVideoFrames)
+@property (nonatomic, readonly) unsigned long numberOfDisplayCompositedVideoFrames;
+@property (nonatomic, readonly) unsigned long numberOfNonDisplayCompositedVideoFrames;
+@end
+#endif
+#endif
+"""
+
 # Sanity anchors that must remain present after patching.
 ANCHORS = [
     "@property (nonatomic, readonly) double totalFrameDelay;",
@@ -40,7 +59,7 @@ def main():
     with io.open(path, "r", encoding="utf-8") as f:
         src = f.read()
 
-    if "__IPHONE_OS_VERSION_MAX_ALLOWED < 170000" in src:
+    if "__IPHONE_OS_VERSION_MAX_ALLOWED < 170000)" in src:
         print("  = %s already patched" % REL)
         return 0
     if OLD not in src:
@@ -48,6 +67,11 @@ def main():
         return 0
 
     src = src.replace(OLD, NEW, 1)
+    if CATEGORY in src:
+        src = src.replace(CATEGORY, CATEGORY_GUARDED, 1)
+    else:
+        print("  ! %s: category branch anchor not found" % REL)
+        return 1
 
     for a in ANCHORS:
         if a not in src:
