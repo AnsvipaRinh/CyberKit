@@ -129,11 +129,12 @@ jobs:
           xcodebuild -project Source/ThirdParty/libwebrtc/libwebrtc.xcodeproj $COMMON
           # ANGLE
           xcodebuild -project Source/ThirdParty/ANGLE/ANGLE.xcodeproj $COMMON -target ANGLE
+          # bmalloc must be built before WTF: WTFConfig.h includes bmalloc's
+          # generated GigacageConfig.h.
+          xcodebuild -project Source/bmalloc/bmalloc.xcodeproj $COMMON -target bmalloc
           # WTF (+icu)
           xcodebuild -project Source/WTF/WTF.xcodeproj $COMMON -target WTF
           xcodebuild -project Source/WTF/WTF.xcodeproj $COMMON -target icu
-          # bmalloc
-          xcodebuild -project Source/bmalloc/bmalloc.xcodeproj $COMMON -target bmalloc
           # WebGPU (frameworks used by the GPU path)
           [ -d Source/WebGPU/WebGPU.xcodeproj ] && xcodebuild -project Source/WebGPU/WebGPU.xcodeproj $COMMON -target WebGPU || echo "  (WebGPU project absent, skipped)"
           # CyberCore (legacy WebCore)
