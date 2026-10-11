@@ -126,43 +126,47 @@ jobs:
           df -h / | sed 's/^/  pre-build: /'
           export IPHONEOS_DEPLOYMENT_TARGET=14.0
           SRC="$(xcrun --sdk iphoneos --show-sdk-path)"
-          COMMON="-sdk $SRC -configuration Release ARCHS=arm64e ONLY_ACTIVE_ARCH=NO \
-            IPHONEOS_DEPLOYMENT_TARGET=14.0 CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -jobs 2 \
-            SYMROOT=\$PWD/CyberKitBuild OBJROOT=\$PWD/CyberKitBuild \
-            CONFIGURATION_BUILD_DIR=\$PWD/CyberKitBuild/Release-iphoneos \
-            FRAMEWORK_SEARCH_PATHS=\\\"\$SRC/System/Library/Frameworks \$PWD/CyberKitBuild/Release-iphoneos\\\" \
-            LIBRARY_SEARCH_PATHS=\\\"\$SRC/usr/lib \$PWD/CyberKitBuild/Release-iphoneos\\\""
+          BUILD="$PWD/CyberKitBuild"
+          # Bash array (not a flat string): a flat $COMMON gets word-split, which
+          # breaks space-separated FRAMEWORK_SEARCH_PATHS (xcodebuild then sees
+          # the second path as a build action).
+          COMMON=(-sdk "$SRC" -configuration Release ARCHS=arm64e ONLY_ACTIVE_ARCH=NO
+            IPHONEOS_DEPLOYMENT_TARGET=14.0 CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -jobs 2
+            "SYMROOT=$BUILD" "OBJROOT=$BUILD"
+            "CONFIGURATION_BUILD_DIR=$BUILD/Release-iphoneos"
+            "FRAMEWORK_SEARCH_PATHS=$SRC/System/Library/Frameworks $BUILD/Release-iphoneos"
+            "LIBRARY_SEARCH_PATHS=$SRC/usr/lib $BUILD/Release-iphoneos")
           build_project() {
             echo "== (helper unused) =="
           }
           :
           # libwebrtc (WebCore dependency), whole project (all targets are deps)
-          xcodebuild -project Source/ThirdParty/libwebrtc/libwebrtc.xcodeproj $COMMON
+          xcodebuild -project Source/ThirdParty/libwebrtc/libwebrtc.xcodeproj "${COMMON[@]}"
           # ANGLE
-          xcodebuild -project Source/ThirdParty/ANGLE/ANGLE.xcodeproj $COMMON -target ANGLE
+          xcodebuild -project Source/ThirdParty/ANGLE/ANGLE.xcodeproj "${COMMON[@]}" -target ANGLE
           # bmalloc must be built before WTF: WTFConfig.h includes bmalloc's
           # generated GigacageConfig.h.
-          xcodebuild -project Source/bmalloc/bmalloc.xcodeproj $COMMON -target bmalloc
+          xcodebuild -project Source/bmalloc/bmalloc.xcodeproj "${COMMON[@]}" -target bmalloc
           # WTF (+icu)
-          xcodebuild -project Source/WTF/WTF.xcodeproj $COMMON -target WTF
-          xcodebuild -project Source/WTF/WTF.xcodeproj $COMMON -target icu
+          xcodebuild -project Source/WTF/WTF.xcodeproj "${COMMON[@]}" -target WTF
+          xcodebuild -project Source/WTF/WTF.xcodeproj "${COMMON[@]}" -target icu
           # CyberScriptCore (JSC) must precede everything that links it:
           # WebGPU and CyberCore both do ("-framework CyberScriptCore").
-          xcodebuild -project Source/CyberScriptCore/CyberScriptCore.xcodeproj $COMMON -target CyberScriptCore
+          xcodebuild -project Source/CyberScriptCore/CyberScriptCore.xcodeproj "${COMMON[@]}" -target CyberScriptCore
           # WebGPU intentionally NOT built: CyberCore links it weakly
           # (LC_LOAD_WEAK_DYLIB), its link step needs CyberScriptCore built and
           # it costs ~10 min of runner time that the hosted runners do not have.
           echo "  (WebGPU skipped - weak dep, runner budget)"
           # CyberCore (legacy WebCore)
-          xcodebuild -project Source/CyberCore/CyberCore.xcodeproj $COMMON -target CyberCore -jobs 1 COMPILER_INDEX_STORE_ENABLE=NO
+          xcodebuild -project Source/CyberCore/CyberCore.xcodeproj "${COMMON[@]}" -target CyberCore -jobs 1 COMPILER_INDEX_STORE_ENABLE=NO
           # CyberKitLegacy
-          xcodebuild -project Source/CyberKitLegacy/CyberKitLegacy.xcodeproj $COMMON -target CyberKitLegacy
+          xcodebuild -project Source/CyberKitLegacy/CyberKitLegacy.xcodeproj "${COMMON[@]}" -target CyberKitLegacy
           # CyberKit: main framework + XPC daemons (WebContent/Networking/GPU),
           # webpushd/adattributiond daemons and the platform lib. Explicit targets
           # (not the 'Everything' aggregate) to avoid building test runners.
           for t in CyberKit WebContent Networking GPU webpushd adattributiond CyberKitPlatform; do
-            xcodebuild -project Source/CyberKit/CyberKit.xcodeproj $COMMON -target "$t"
+            xcodebuild -project Source/CyberKit/CyberKit.xcodeproj "${COMMON[@]}" -target "$t"
           done
           df -h / | sed 's/^/  post-build: /'
 
