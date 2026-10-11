@@ -73,6 +73,12 @@ jobs:
         run: |
           python3 .github/wp-ci/wp-jsc-compat.py .
 
+      - name: Apply SDK-compat patch for SDK-exposed AVFoundation SPI (iOS 17 SDK)
+        # iOS 17.4+ SDK exposes the private AVVideoPerformanceMetrics interface,
+        # clashing with PAL/spi/cocoa/AVFoundationSPI.h's vendored copy.
+        run: |
+          python3 .github/wp-ci/wp-avspi-compat.py .
+
       - name: Apply WP class rename (OUR step — ObjC classes, fixes M5 co-load)        # \b-границы не задевают C API (WKPageRef и т.п.); заголовки включаем:
         # @interface-декларации обязаны переименоваться вместе с .mm.
         # Ассеты лежат в форке (.github/wp-ci/), кладёт push-to-fork.sh.
