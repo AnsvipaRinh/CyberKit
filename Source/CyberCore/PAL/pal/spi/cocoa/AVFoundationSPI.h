@@ -420,7 +420,7 @@ NS_ASSUME_NONNULL_END
 @property (nonatomic, readonly) unsigned long numberOfNonDisplayCompositedVideoFrames;
 @property (nonatomic, readonly) double totalFrameDelay;
 @end
-#else
+#elif (!defined(__IPHONE_OS_VERSION_MAX_ALLOWED) || __IPHONE_OS_VERSION_MAX_ALLOWED < 170000)
 @interface AVVideoPerformanceMetrics (AVVideoPerformanceMetricsDisplayCompositedVideoFrames)
 @property (nonatomic, readonly) unsigned long numberOfDisplayCompositedVideoFrames;
 @property (nonatomic, readonly) unsigned long numberOfNonDisplayCompositedVideoFrames;
