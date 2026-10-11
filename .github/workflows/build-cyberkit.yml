@@ -89,6 +89,12 @@ jobs:
         run: |
           python3 .github/wp-ci/wp-avspi-compat.py .
 
+      - name: Apply WP patch for Ruby >= 3.2 (File.exists? removed)
+        # Hosted runners ship Ruby 3.x where File.exists? is gone; WebKit's
+        # Tools/Scripts/check-for-inappropriate-* call it and abort the build.
+        run: |
+          python3 .github/wp-ci/wp-ruby-compat.py .
+
       - name: Apply WP class rename (OUR step — ObjC classes, fixes M5 co-load)        # \b-границы не задевают C API (WKPageRef и т.п.); заголовки включаем:
         # @interface-декларации обязаны переименоваться вместе с .mm.
         # Ассеты лежат в форке (.github/wp-ci/), кладёт push-to-fork.sh.
@@ -141,6 +147,15 @@ jobs:
             echo "== (helper unused) =="
           }
           :
+          # Keep the Actions connection alive and watch resources: several runs
+          # died silently during long script phases (no error output at all).
+          ( while true; do
+              echo "  [hb] $(date -u +%H:%M:%S) free:$(df -h / | awk 'NR==2{print $4}') load:$(sysctl -n vm.loadavg 2>/dev/null | cut -d" " -f1)"
+              sleep 60
+            done ) &
+          HB=$!
+          trap 'kill $HB 2>/dev/null || true' EXIT
+
           # libwebrtc (WebCore dependency), whole project (all targets are deps)
           xcodebuild -project Source/ThirdParty/libwebrtc/libwebrtc.xcodeproj "${COMMON[@]}"
           # ANGLE
