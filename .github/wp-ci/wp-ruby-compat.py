@@ -30,8 +30,19 @@ def ruby_files(root):
     for base, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         for f in files:
+            full = os.path.join(base, f)
             if f.endswith(".rb") or f.endswith(".gemspec") or f == "Rakefile":
-                yield os.path.join(base, f)
+                yield full
+                continue
+            # WebKit's Tools/Scripts helpers have NO extension at all and start
+            # with a ruby shebang (e.g. check-for-inappropriate-macros-in-external-headers).
+            if "." not in f:
+                try:
+                    with io.open(full, "r", encoding="utf-8") as fh:
+                        if "ruby" in fh.readline().lower():
+                            yield full
+                except (UnicodeDecodeError, OSError):
+                    pass
 
 
 def main():
