@@ -120,7 +120,7 @@ jobs:
         with:
           path: |
             CyberKitBuild
-          key: ${{ env.CACHE_VER }}-deps
+          key: ${{ env.CACHE_VER }}-deps-
 
   # ---------------------------------------------------------------------------
   # Stage 2: the memory hog. Cached separately so a runner eviction only costs
@@ -200,7 +200,7 @@ jobs:
         with:
           path: |
             CyberKitBuild
-          key: ${{ env.CACHE_VER }}-deps
+          key: ${{ env.CACHE_VER }}-deps-
           restore-keys: |
             ${{ env.CACHE_VER }}-deps-
 
