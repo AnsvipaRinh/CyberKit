@@ -200,6 +200,7 @@ jobs:
         with:
           path: |
             CyberKitBuild
+          key: ${{ env.CACHE_VER }}-deps-${{ github.sha }}
           restore-keys: |
             ${{ env.CACHE_VER }}-
 
