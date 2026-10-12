@@ -3,30 +3,27 @@ name: Build CyberKit (Track S) - renamed WebKit for iOS 14
 on:
   workflow_dispatch:
     inputs:
-      arch:
-        description: 'Target architecture (arm64 = our patched-MobileSafari path)'
+      ios_version:
+        description: 'Target iOS deployment version (P0: 14.x)'
         required: true
-        default: 'arm64'
+        default: '14.0'
       wk_prefix:
         description: 'ObjC class rename prefix (WKWebView -> <prefix>WebView)'
         required: false
         default: 'WP'
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Stage 1: toolchain + deps. Cheap and reliable; cached for the next stages.
-  # ---------------------------------------------------------------------------
-  deps:
-    name: "1/3 deps (bmalloc, WTF, icu, CyberScriptCore)"
-    runs-on: macos-14
-    timeout-minutes: 60
+  build-cyberkit:
+    runs-on: macos-13
+    timeout-minutes: 180
     env:
       DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
-      IOS_DEPLOYMENT_TARGET: 14.0
-      TARGET_ARCH: ${{ github.event.inputs.arch }}
+      IOS_DEPLOYMENT_TARGET: ${{ github.event.inputs.ios_version }}
       WK_PREFIX: ${{ github.event.inputs.wk_prefix }}
-      CACHE_VER: v2
     steps:
+      # Дизайн: форк CyberKit несёт наши rename-ассеты в .github/wp-ci/
+      # (кладёт push-to-fork.sh). Отдельного checkout нашего репо НЕТ —
+      # у него нет remote, на раннере это бы не сработало.
       - name: Checkout CyberKit fork (safari-7616 branch + our wp-ci assets)
         uses: actions/checkout@v4
         with:
@@ -39,7 +36,7 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_15.4.app
           xcodebuild -version
 
-      - name: Install build dependencies (Ruby 3.x, gperf, bison, flex, ninja, cmake)
+      - name: Install build dependencies (Ruby, gperf, bison, flex, ninja, cmake)
         # WebKit's derived-sources steps shell out to these. Missing gperf made
         # CyberCore's process-css-properties.py die right where every hosted run
         # stopped (no error output, job ended within ~2 min). Ruby >= 3.2 removed
@@ -48,335 +45,176 @@ jobs:
           set -e
           which ruby || brew install ruby
           ruby --version
-          which ruby || brew install ruby
-          ruby --version
           which gperf || brew install gperf
           which bison || brew install bison
           which flex   || brew install flex
           which ninja  || (brew install ninja || echo "  ninja missing (optional)")
           which cmake  || brew install cmake
-          which rename || brew install rename
-          gperf --version | head -1
           gperf --version | head -1
 
       - name: Apply SDK-compat patch for vendored XPC SPI (iPhoneOS 16.4+ SDK conflict)
-        run: python3 .github/wp-ci/wp-xpcspi-compat.py .
+        # Root cause of CI failure: WTF's vendored XPCSPI.h re-declares
+        # XPC_ACTIVITY_STATE_* / xpc_*_t, which the modern iOS SDK ships in
+        # <xpc/xpc.h> (via activity.h) -> hard redefinition errors as -Werror.
+        # libwebrtc (vpx/aom/absl) itself compiles fine; not the blocker.
+        run: |
+          python3 .github/wp-ci/wp-xpcspi-compat.py .
+
+      - name: Apply SDK-compat patch for libwebrtc libSystem path (macOS 14 runner)
+        # libwebrtc.xcodeproj hardcodes /usr/lib/libSystem.B.dylib in
+        # OTHER_LDFLAGS; on macOS 11+ those dylibs live only in the dyld
+        # shared cache, so Xcode fails libwebrtc with
+        # "Build input file cannot be found". Repoint at $(SDKROOT).
+        run: |
+          python3 .github/wp-ci/wp-libwebrtc-compat.py .
 
       - name: Apply SDK-compat patch for unavailable private XPC SPI (iOS 16.4+ SDK)
-        run: python3 .github/wp-ci/wp-xpcavail-compat.py .
+        # CyberKit Inspector calls xpc_connection_create_mach_service, which the
+        # modern iOS SDK marks "__API_UNAVAILABLE on iOS". dlsym macros keep
+        # call sites compiling and resolve the private symbols at runtime.
+        run: |
+          python3 .github/wp-ci/wp-xpcavail-compat.py .
 
       - name: Apply SDK-compat patch for removed objc-runtime umbrella
-        run: python3 .github/wp-ci/wp-objcruntime-compat.py .
+        # Modern SDKs dropped the legacy <objc/objc-runtime.h> umbrella.
+        run: |
+          python3 .github/wp-ci/wp-objcruntime-compat.py .
 
       - name: Apply SDK-compat patch for readline usage in jsc.cpp (iOS SDK lacks readline)
-        run: python3 .github/wp-ci/wp-jsc-compat.py .
+        run: |
+          python3 .github/wp-ci/wp-jsc-compat.py .
 
       - name: Apply SDK-compat patch for SDK-exposed AVFoundation SPI (iOS 17 SDK)
-        run: python3 .github/wp-ci/wp-avspi-compat.py .
+        # iOS 17.4+ SDK exposes the private AVVideoPerformanceMetrics interface,
+        # clashing with PAL/spi/cocoa/AVFoundationSPI.h's vendored copy.
+        run: |
+          python3 .github/wp-ci/wp-avspi-compat.py .
 
       - name: Apply WP patch for Ruby >= 3.2 (File.exists? removed)
-        run: python3 .github/wp-ci/wp-ruby-compat.py .
+        # Hosted runners ship Ruby 3.x where File.exists? is gone; WebKit's
+        # Tools/Scripts/check-for-inappropriate-* call it and abort the build.
+        run: |
+          python3 .github/wp-ci/wp-ruby-compat.py .
 
-      - name: Apply WP class rename (OUR step — ObjC classes, fixes M5 co-load)
+      - name: Apply WP class rename (OUR step — ObjC classes, fixes M5 co-load)        # \b-границы не задевают C API (WKPageRef и т.п.); заголовки включаем:
+        # @interface-декларации обязаны переименоваться вместе с .mm.
+        # Ассеты лежат в форке (.github/wp-ci/), кладёт push-to-fork.sh.
         run: |
           WP_ALLOW_IN_PLACE=1 bash .github/wp-ci/wp-rename-classes.sh \
             apply ./Source --include-headers
 
       - name: Apply CyberKit framework rename (THEIR script — frameworks/bundles + com.apple -> com.matthewbenedict)
-        run: bash script_rename.sh
+        run: |
+          export WK_PREFIX=${{ github.event.inputs.wk_prefix }}
+          if [ -f "Tools/Scripts/script_rename.sh" ]; then
+            ./Tools/Scripts/script_rename.sh
+          else
+            echo "script_rename.sh not found, skipping rename"
+          fi
 
       - name: Apply WP bundle IDs (OUR step — com.matthewbenedict.* -> space.webportkit.*)
+        # ПОСЛЕ их скрипта (он создаёт matthewbenedict-ID). XPC/песочницы/кэши обязаны быть
+        # нашими, иначе коллизия с установленным CyberKit на том же устройстве. Замерено: 353.
         run: |
-          WP_ALLOW_IN_PLACE=1 bash .github/wp-ci/wp-rename-bundles.sh \
-            apply ./Source --include-headers
+          WP_ALLOW_IN_PLACE=1 bash .github/wp-ci/wp-rename-ids.sh apply ./Source
 
-      - name: Build deps and cache them
+      - name: Build donor frameworks (minimal target set, throttled)
+        # The whole-workspace build-webkit run exceeds the GitHub macOS runner's
+        # practical limits (runs consistently died ~55min in, at the CyberCore
+        # stage -- disk/memory pressure on the hosted runner). We build only the
+        # projects needed for the rendering stack + XPC daemons, throttled to
+        # 2 xcodebuild jobs:
+        #   libwebrtc, ANGLE, WTF(+icu), bmalloc, CyberCore, CyberScriptCore,
+        #   CyberKitLegacy, WebGPU, CyberKit (aggregate 'Everything')
+        # Skipping: WebInspectorUI, WebDriver, jsc CLI, minibrowser, all test
+        # targets -- none of them are in the iPhone-side Frameworks/ directory.
         run: |
           set -euo pipefail
           df -h / | sed 's/^/  pre-build: /'
           export IPHONEOS_DEPLOYMENT_TARGET=14.0
           SRC="$(xcrun --sdk iphoneos --show-sdk-path)"
           BUILD="$PWD/CyberKitBuild"
-          # Bash array (not a flat string): a flat string is word-split, which
-          # breaks space-separated FRAMEWORK_SEARCH_PATHS.
-          # ARCHS: single arch. arm64 is what our validated device path uses
-          # (MobileSafari patched arm64e->arm64).
-          COMMON=(-sdk "$SRC" -configuration Release -quiet ARCHS="${TARGET_ARCH:-arm64}" ONLY_ACTIVE_ARCH=NO
+          # Bash array (not a flat string): a flat $COMMON gets word-split, which
+          # breaks space-separated FRAMEWORK_SEARCH_PATHS (xcodebuild then sees
+          # the second path as a build action).
+          COMMON=(-sdk "$SRC" -configuration Release ARCHS=arm64e ONLY_ACTIVE_ARCH=NO
             IPHONEOS_DEPLOYMENT_TARGET=14.0 CODE_SIGNING_ALLOWED=NO
             CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -jobs 2
             "SYMROOT=$BUILD" "OBJROOT=$BUILD"
             "CONFIGURATION_BUILD_DIR=$BUILD/Release-iphoneos"
             "FRAMEWORK_SEARCH_PATHS=$SRC/System/Library/Frameworks $BUILD/Release-iphoneos"
             "LIBRARY_SEARCH_PATHS=$SRC/usr/lib $BUILD/Release-iphoneos")
-          # bmalloc before WTF: WTFConfig.h includes bmalloc's GigacageConfig.h.
+          build_project() {
+            echo "== (helper unused) =="
+          }
+          :
+          # Keep the Actions connection alive and watch resources: several runs
+          # died silently during long script phases (no error output at all).
+          ( while true; do
+              MEM=$(vm_stat 2>/dev/null | awk '/Pages free/ {gsub(".","",$3); print $3}')
+              echo "  [hb] $(date -u +%H:%M:%S) disk:$(df -h / | awk 'NR==2{print $4}') memfree_pages:${MEM:-?}"
+              sleep 60
+            done ) &
+          HB=$!
+          trap 'kill $HB 2>/dev/null || true' EXIT
+
+          # libwebrtc (WebCore dependency), whole project (all targets are deps)
+          xcodebuild -project Source/ThirdParty/libwebrtc/libwebrtc.xcodeproj "${COMMON[@]}"
+          # ANGLE
+          xcodebuild -project Source/ThirdParty/ANGLE/ANGLE.xcodeproj "${COMMON[@]}" -target ANGLE
+          # bmalloc must be built before WTF: WTFConfig.h includes bmalloc's
+          # generated GigacageConfig.h.
           xcodebuild -project Source/bmalloc/bmalloc.xcodeproj "${COMMON[@]}" -target bmalloc
+          # WTF (+icu)
           xcodebuild -project Source/WTF/WTF.xcodeproj "${COMMON[@]}" -target WTF
           xcodebuild -project Source/WTF/WTF.xcodeproj "${COMMON[@]}" -target icu
+          # CyberScriptCore (JSC) must precede everything that links it:
+          # WebGPU and CyberCore both do ("-framework CyberScriptCore").
           xcodebuild -project Source/CyberScriptCore/CyberScriptCore.xcodeproj "${COMMON[@]}" -target CyberScriptCore
-          echo "=== stage1 done:"; ls "$BUILD/Release-iphoneos" | head
-
-      - name: Save deps cache
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            CyberKitBuild
-          key: ${{ env.CACHE_VER }}-deps-
-
-  # ---------------------------------------------------------------------------
-  # Stage 2: the memory hog. Cached separately so a runner eviction only costs
-  # this segment, never the whole build. libwebrtc/ANGLE/WebGPU are deliberately
-  # NOT built: CyberCore links them weakly (LC_LOAD_WEAK_DYLIB) and we reuse the
-  # released binaries at packaging time.
-  # ---------------------------------------------------------------------------
-  webcore:
-    name: "2/3 webcore (CyberCore, CyberKitLegacy)"
-    needs: deps
-    runs-on: macos-14
-    timeout-minutes: 150
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
-      IOS_DEPLOYMENT_TARGET: 14.0
-      TARGET_ARCH: ${{ github.event.inputs.arch }}
-      WK_PREFIX: ${{ github.event.inputs.wk_prefix }}
-      CACHE_VER: v2
-    steps:
-      - name: Checkout CyberKit fork (safari-7616 branch + our wp-ci assets)
-        uses: actions/checkout@v4
-        with:
-          ref: safari-7616.1.27.211-branch
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Setup Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
-
-      - name: Install build dependencies (Ruby 3.x, gperf, bison, flex, ninja, cmake)
-        run: |
-          set -e
-          which ruby || brew install ruby
-          which ruby || brew install ruby
-          ruby --version
-          which gperf || brew install gperf
-          which bison || brew install bison
-          which flex   || brew install flex
-          which ninja  || (brew install ninja || echo "  ninja missing (optional)")
-          which cmake  || brew install cmake
-          which rename || brew install rename
-          gperf --version | head -1
-
-      - name: Apply SDK-compat patch for vendored XPC SPI (iPhoneOS 16.4+ SDK conflict)
-        run: python3 .github/wp-ci/wp-xpcspi-compat.py .
-
-      - name: Apply SDK-compat patch for unavailable private XPC SPI (iOS 16.4+ SDK)
-        run: python3 .github/wp-ci/wp-xpcavail-compat.py .
-
-      - name: Apply SDK-compat patch for removed objc-runtime umbrella
-        run: python3 .github/wp-ci/wp-objcruntime-compat.py .
-
-      - name: Apply SDK-compat patch for readline usage in jsc.cpp (iOS SDK lacks readline)
-        run: python3 .github/wp-ci/wp-jsc-compat.py .
-
-      - name: Apply SDK-compat patch for SDK-exposed AVFoundation SPI (iOS 17 SDK)
-        run: python3 .github/wp-ci/wp-avspi-compat.py .
-
-      - name: Apply WP patch for Ruby >= 3.2 (File.exists? removed)
-        run: python3 .github/wp-ci/wp-ruby-compat.py .
-
-      - name: Apply WP class rename (OUR step — ObjC classes, fixes M5 co-load)
-        run: |
-          WP_ALLOW_IN_PLACE=1 bash .github/wp-ci/wp-rename-classes.sh \
-            apply ./Source --include-headers
-
-      - name: Apply CyberKit framework rename (THEIR script — frameworks/bundles + com.apple -> com.matthewbenedict)
-        run: bash script_rename.sh
-
-      - name: Apply WP bundle IDs (OUR step — com.matthewbenedict.* -> space.webportkit.*)
-        run: |
-          WP_ALLOW_IN_PLACE=1 bash .github/wp-ci/wp-rename-bundles.sh \
-            apply ./Source --include-headers
-
-      - name: Restore build cache (deps stage output)
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            CyberKitBuild
-          key: ${{ env.CACHE_VER }}-deps-
-          restore-keys: |
-            ${{ env.CACHE_VER }}-deps-
-
-      - name: Verify cache has the deps
-        run: |
-          set -euo pipefail
-          ls CyberKitBuild/Release-iphoneos 2>/dev/null | head -20
-          for f in WTF.framework bmalloc.framework icu CyberScriptCore.framework; do
-            [ -e "CyberKitBuild/Release-iphoneos/$f" ] || { echo "MISSING in cache: $f"; exit 1; }
-          done
-          echo "cache OK"
-
-      - name: Build webcore
-        run: |
-          set -euo pipefail
-          export IPHONEOS_DEPLOYMENT_TARGET=14.0
-          SRC="$(xcrun --sdk iphoneos --show-sdk-path)"
-          BUILD="$PWD/CyberKitBuild"
-          COMMON=(-sdk "$SRC" -configuration Release -quiet ARCHS="${TARGET_ARCH:-arm64}" ONLY_ACTIVE_ARCH=NO
-            IPHONEOS_DEPLOYMENT_TARGET=14.0 CODE_SIGNING_ALLOWED=NO
-            CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -jobs 2
-            "SYMROOT=$BUILD" "OBJROOT=$BUILD"
-            "CONFIGURATION_BUILD_DIR=$BUILD/Release-iphoneos"
-            "FRAMEWORK_SEARCH_PATHS=$SRC/System/Library/Frameworks $BUILD/Release-iphoneos"
-            "LIBRARY_SEARCH_PATHS=$SRC/usr/lib $BUILD/Release-iphoneos")
-          # Serial: this is the target on which every hosted runner died.
+          # WebGPU intentionally NOT built: CyberCore links it weakly
+          # (LC_LOAD_WEAK_DYLIB), its link step needs CyberScriptCore built and
+          # it costs ~10 min of runner time that the hosted runners do not have.
+          echo "  (WebGPU skipped - weak dep, runner budget)"
+          # CyberCore (legacy WebCore)
           xcodebuild -project Source/CyberCore/CyberCore.xcodeproj "${COMMON[@]}" -target CyberCore COMPILER_INDEX_STORE_ENABLE=NO
+          # CyberKitLegacy
           xcodebuild -project Source/CyberKitLegacy/CyberKitLegacy.xcodeproj "${COMMON[@]}" -target CyberKitLegacy
-          echo "=== stage2 done:"; ls "$BUILD/Release-iphoneos" | head
-
-      - name: Save webcore cache
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            CyberKitBuild
-          key: ${{ env.CACHE_VER }}-webcore-${{ github.sha }}
-
-  # ---------------------------------------------------------------------------
-  # Stage 3: main framework + XPC services, packaging with reused weak deps.
-  # ---------------------------------------------------------------------------
-  kit:
-    name: "3/3 CyberKit + services + package"
-    needs: webcore
-    runs-on: macos-14
-    timeout-minutes: 90
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
-      IOS_DEPLOYMENT_TARGET: 14.0
-      TARGET_ARCH: ${{ github.event.inputs.arch }}
-      WK_PREFIX: ${{ github.event.inputs.wk_prefix }}
-      CACHE_VER: v2
-    steps:
-      - name: Checkout CyberKit fork (safari-7616 branch + our wp-ci assets)
-        uses: actions/checkout@v4
-        with:
-          ref: safari-7616.1.27.211-branch
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Setup Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
-
-      - name: Install build dependencies (Ruby 3.x, gperf, bison, flex, ninja, cmake)
-        run: |
-          set -e
-          which ruby || brew install ruby
-          which ruby || brew install ruby
-          ruby --version
-          which gperf || brew install gperf
-          which bison || brew install bison
-          which flex   || brew install flex
-          which ninja  || (brew install ninja || echo "  ninja missing (optional)")
-          which cmake  || brew install cmake
-          which rename || brew install rename
-          gperf --version | head -1
-
-      - name: Apply SDK-compat patch for vendored XPC SPI (iPhoneOS 16.4+ SDK conflict)
-        run: python3 .github/wp-ci/wp-xpcspi-compat.py .
-
-      - name: Apply SDK-compat patch for unavailable private XPC SPI (iOS 16.4+ SDK)
-        run: python3 .github/wp-ci/wp-xpcavail-compat.py .
-
-      - name: Apply SDK-compat patch for removed objc-runtime umbrella
-        run: python3 .github/wp-ci/wp-objcruntime-compat.py .
-
-      - name: Apply SDK-compat patch for readline usage in jsc.cpp (iOS SDK lacks readline)
-        run: python3 .github/wp-ci/wp-jsc-compat.py .
-
-      - name: Apply SDK-compat patch for SDK-exposed AVFoundation SPI (iOS 17 SDK)
-        run: python3 .github/wp-ci/wp-avspi-compat.py .
-
-      - name: Apply WP patch for Ruby >= 3.2 (File.exists? removed)
-        run: python3 .github/wp-ci/wp-ruby-compat.py .
-
-      - name: Apply WP class rename (OUR step — ObjC classes, fixes M5 co-load)
-        run: |
-          WP_ALLOW_IN_PLACE=1 bash .github/wp-ci/wp-rename-classes.sh \
-            apply ./Source --include-headers
-
-      - name: Apply CyberKit framework rename (THEIR script — frameworks/bundles + com.apple -> com.matthewbenedict)
-        run: bash script_rename.sh
-
-      - name: Apply WP bundle IDs (OUR step — com.matthewbenedict.* -> space.webportkit.*)
-        run: |
-          WP_ALLOW_IN_PLACE=1 bash .github/wp-ci/wp-rename-bundles.sh \
-            apply ./Source --include-headers
-
-      - name: Restore build cache (webcore stage output)
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            CyberKitBuild
-          key: ${{ env.CACHE_VER }}-webcore-${{ github.sha }}
-          restore-keys: |
-            ${{ env.CACHE_VER }}-deps-
-
-      - name: Verify cache has the deps + webcore
-        run: |
-          set -euo pipefail
-          for f in WTF.framework bmalloc.framework CyberScriptCore.framework CyberCore.framework CyberKitLegacy.framework; do
-            [ -e "CyberKitBuild/Release-iphoneos/$f" ] || { echo "MISSING in cache: $f"; exit 1; }
-          done
-          echo "cache OK"
-
-      - name: Build CyberKit + XPC services
-        run: |
-          set -euo pipefail
-          export IPHONEOS_DEPLOYMENT_TARGET=14.0
-          SRC="$(xcrun --sdk iphoneos --show-sdk-path)"
-          BUILD="$PWD/CyberKitBuild"
-          COMMON=(-sdk "$SRC" -configuration Release -quiet ARCHS="${TARGET_ARCH:-arm64}" ONLY_ACTIVE_ARCH=NO
-            IPHONEOS_DEPLOYMENT_TARGET=14.0 CODE_SIGNING_ALLOWED=NO
-            CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -jobs 2
-            "SYMROOT=$BUILD" "OBJROOT=$BUILD"
-            "CONFIGURATION_BUILD_DIR=$BUILD/Release-iphoneos"
-            "FRAMEWORK_SEARCH_PATHS=$SRC/System/Library/Frameworks $BUILD/Release-iphoneos"
-            "LIBRARY_SEARCH_PATHS=$SRC/usr/lib $BUILD/Release-iphoneos")
+          # CyberKit: main framework + XPC daemons (WebContent/Networking/GPU),
+          # webpushd/adattributiond daemons and the platform lib. Explicit targets
+          # (not the 'Everything' aggregate) to avoid building test runners.
           for t in CyberKit WebContent Networking GPU webpushd adattributiond CyberKitPlatform; do
-            echo "  * $t"
             xcodebuild -project Source/CyberKit/CyberKit.xcodeproj "${COMMON[@]}" -target "$t"
           done
-          echo "=== stage3 build done:"; ls "$BUILD/Release-iphoneos" | head -20
+          df -h / | sed 's/^/  post-build: /'
 
-      - name: "Add weak dependencies (reused from release, not built)"
+      - name: Package CyberKit frameworks
         run: |
-          set -euo pipefail
-          BUILD="$PWD/CyberKitBuild/Release-iphoneos"
-          mkdir -p wp-weakdeps && cd wp-weakdeps
-          curl -fsSL -o weakdeps.tgz \
-            https://github.com/AnsvipaRinh/WebPortKit/releases/download/weakdeps-v1/wp-weakdeps-v1.tgz
-          tar -xzf weakdeps.tgz
-          cp -R libwebrtc.dylib libANGLE-shared.dylib _libJetsamConfigurator.dylib "$BUILD"/
-          cp -R WebGPU.framework "$BUILD"/
-          ls "$BUILD" | grep -E "webrtc|ANGLE|WebGPU|Jetsam" || true
+          mkdir -p build/package/Frameworks
+          # Copy built frameworks from build directory
+          cp -R build/Release/*.framework build/package/Frameworks/ 2>/dev/null || true
+          cp -R build/Release-iphoneos/*.framework build/package/Frameworks/ 2>/dev/null || true
+          # Also check WebKitBuild
+          cp -R WebKitBuild/Release/*.framework build/package/Frameworks/ 2>/dev/null || true
+          cp -R WebKitBuild/Release-iphoneos/*.framework build/package/Frameworks/ 2>/dev/null || true
+          # Create manifest
+          ls -la build/package/Frameworks/ > build/package/MANIFEST.txt
 
-      - name: Package + verify architectures
-        run: |
-          set -euo pipefail
-          BUILD="$PWD/CyberKitBuild/Release-iphoneos"
-          OUT="$PWD/donor-out"; rm -rf "$OUT"; mkdir -p "$OUT/Frameworks"
-          for fw in "$BUILD"/*.framework; do cp -R "$fw" "$OUT/Frameworks/"; done
-          for lib in "$BUILD"/*.dylib; do cp "$lib" "$OUT/Frameworks/"; done
-          echo "=== frameworks:"; ls "$OUT/Frameworks"
-          echo "=== architectures (expect ${TARGET_ARCH}, no others):"
-          for f in "$OUT"/Frameworks/*.framework/* "$OUT"/Frameworks/*.dylib; do
-            file "$f" 2>/dev/null | grep -o "Mach-O 64-bit [a-z0-9 ]*object" | head -1 | sed "s#^#  $(basename "$f"): #"
-          done
-          echo "=== XPC services shipped:"
-          ls "$OUT"/Frameworks/*.framework/XPCServices 2>/dev/null | head -20
-          tar -czf cyberkit-donor.tgz -C "$OUT" Frameworks
-          ls -la cyberkit-donor.tgz
-
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cyberkit-donor-${{ github.sha }}
-          path: cyberkit-donor.tgz
-          retention-days: 14
-          overwrite: true
+          name: cyberkit-ios${{ github.event.inputs.ios_version }}-${{ github.event.inputs.wk_prefix }}
+          path: |
+            build/package/Frameworks/
+            build/package/MANIFEST.txt
+          retention-days: 7
+
+      - name: Create Release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: cyberkit-ios${{ github.event.inputs.ios_version }}-${{ github.event.inputs.wk_prefix }}-${{ github.run_number }}
+          name: CyberKit iOS ${{ github.event.inputs.ios_version }} (${{ github.event.inputs.wk_prefix }}) - Build ${{ github.run_number }}
+          files: |
+            build/package/Frameworks/*.framework
+            build/package/MANIFEST.txt
+          generate_release_notes: true
