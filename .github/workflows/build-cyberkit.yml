@@ -174,7 +174,7 @@ jobs:
           # it costs ~10 min of runner time that the hosted runners do not have.
           echo "  (WebGPU skipped - weak dep, runner budget)"
           # CyberCore (legacy WebCore)
-          xcodebuild -project Source/CyberCore/CyberCore.xcodeproj "${COMMON[@]}" -target CyberCore -jobs 1 COMPILER_INDEX_STORE_ENABLE=NO
+          xcodebuild -project Source/CyberCore/CyberCore.xcodeproj "${COMMON[@]}" -target CyberCore COMPILER_INDEX_STORE_ENABLE=NO
           # CyberKitLegacy
           xcodebuild -project Source/CyberKitLegacy/CyberKitLegacy.xcodeproj "${COMMON[@]}" -target CyberKitLegacy
           # CyberKit: main framework + XPC daemons (WebContent/Networking/GPU),
