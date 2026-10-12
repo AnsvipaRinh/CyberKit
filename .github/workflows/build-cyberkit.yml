@@ -14,7 +14,7 @@ on:
 
 jobs:
   build-cyberkit:
-    runs-on: macos-13
+    runs-on: macos-14-large
     timeout-minutes: 180
     env:
       DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
