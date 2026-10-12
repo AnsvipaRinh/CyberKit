@@ -48,11 +48,15 @@ jobs:
           set -e
           which ruby || brew install ruby
           ruby --version
+          which ruby || brew install ruby
+          ruby --version
           which gperf || brew install gperf
           which bison || brew install bison
           which flex   || brew install flex
           which ninja  || (brew install ninja || echo "  ninja missing (optional)")
           which cmake  || brew install cmake
+          which rename || brew install rename
+          gperf --version | head -1
           gperf --version | head -1
 
       - name: Apply SDK-compat patch for vendored XPC SPI (iPhoneOS 16.4+ SDK conflict)
@@ -150,11 +154,15 @@ jobs:
         run: |
           set -e
           which ruby || brew install ruby
+          which ruby || brew install ruby
+          ruby --version
           which gperf || brew install gperf
           which bison || brew install bison
           which flex   || brew install flex
           which ninja  || (brew install ninja || echo "  ninja missing (optional)")
           which cmake  || brew install cmake
+          which rename || brew install rename
+          gperf --version | head -1
 
       - name: Apply SDK-compat patch for vendored XPC SPI (iPhoneOS 16.4+ SDK conflict)
         run: python3 .github/wp-ci/wp-xpcspi-compat.py .
@@ -258,11 +266,15 @@ jobs:
         run: |
           set -e
           which ruby || brew install ruby
+          which ruby || brew install ruby
+          ruby --version
           which gperf || brew install gperf
           which bison || brew install bison
           which flex   || brew install flex
           which ninja  || (brew install ninja || echo "  ninja missing (optional)")
           which cmake  || brew install cmake
+          which rename || brew install rename
+          gperf --version | head -1
 
       - name: Apply SDK-compat patch for vendored XPC SPI (iPhoneOS 16.4+ SDK conflict)
         run: python3 .github/wp-ci/wp-xpcspi-compat.py .
