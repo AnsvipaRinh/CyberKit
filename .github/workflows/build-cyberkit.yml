@@ -39,8 +39,7 @@ jobs:
       - name: Install build dependencies (Ruby, gperf, bison, flex, ninja, cmake)
         # WebKit's derived-sources steps shell out to these. Missing gperf made
         # CyberCore's process-css-properties.py die right where every hosted run
-        # stopped (no error output, job ended within ~2 min). Ruby >= 3.2 removed
-        # File.exists? which the check-for-* scripts call.
+        # stopped (no error output, job ended within ~2 min).
         run: |
           set -e
           which ruby || brew install ruby
@@ -158,10 +157,6 @@ jobs:
           HB=$!
           trap 'kill $HB 2>/dev/null || true' EXIT
 
-          # libwebrtc (WebCore dependency), whole project (all targets are deps)
-          xcodebuild -project Source/ThirdParty/libwebrtc/libwebrtc.xcodeproj "${COMMON[@]}"
-          # ANGLE
-          xcodebuild -project Source/ThirdParty/ANGLE/ANGLE.xcodeproj "${COMMON[@]}" -target ANGLE
           # bmalloc must be built before WTF: WTFConfig.h includes bmalloc's
           # generated GigacageConfig.h.
           xcodebuild -project Source/bmalloc/bmalloc.xcodeproj "${COMMON[@]}" -target bmalloc
